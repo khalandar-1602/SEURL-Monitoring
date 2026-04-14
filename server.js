@@ -329,7 +329,7 @@ async function sendTeamsNotification(results) {
             {
               type: "Action.OpenUrl",
               title: "📊 Open Dashboard & View Screenshots",
-              url: `http://localhost:${PORT}`,
+              url: `https://seurl-monitoring.onrender.com/`,
             },
           ],
         },
