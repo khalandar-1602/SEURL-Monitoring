@@ -1,0 +1,14 @@
+{
+  "name": "url-monitor",
+  "version": "1.0.0",
+  "description": "Batch URL monitoring application with screenshots",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "monitor": "node server.js --run"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "puppeteer": "^23.5.0"
+  }
+}
