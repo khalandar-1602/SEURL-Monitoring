@@ -397,3 +397,4 @@ app.listen(PORT, () => {
   console.log(`║  Open on port ${PORT}                            ║`);
   console.log(`║  Triggered via cron-job.org every 2 hours     ║`);
   console.log(`╚══════════════════════════════════════════════╝\n`);
+});
