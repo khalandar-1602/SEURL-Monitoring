@@ -139,8 +139,8 @@ async function runMonitoring() {
 
       // Navigate and capture HTTP status — wait for full load
       const response = await page.goto(url, {
-        waitUntil: ["load", "domcontentloaded", "networkidle0"],
-        timeout: 90000,
+        waitUntil: ["load", "domcontentloaded", "networkidle2"],
+        timeout: 120000,
       });
 
       const httpStatus = response ? response.status() : 0;
@@ -397,4 +397,12 @@ app.listen(PORT, () => {
   console.log(`║  Open on port ${PORT}                            ║`);
   console.log(`║  Triggered via cron-job.org every 2 hours     ║`);
   console.log(`╚══════════════════════════════════════════════╝\n`);
+
+  // Auto-run monitoring on startup
+  console.log("Auto-starting monitoring on server boot...");
+  isRunning = true;
+  monitorResults = [];
+  runMonitoring()
+    .catch((err) => console.error("Startup monitoring error:", err))
+    .finally(() => { isRunning = false; });
 });

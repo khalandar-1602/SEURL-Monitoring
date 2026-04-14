@@ -538,9 +538,17 @@
         <h1>URL <span>Monitor</span></h1>
       </div>
       <div class="schedule-status" id="scheduleStatus">
-        <div class="schedule-indicator">
-          <span class="schedule-dot"></span>
-          <span id="scheduleText">Auto-monitoring every 2 hours</span>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div class="schedule-indicator">
+            <span class="schedule-dot"></span>
+            <span id="scheduleText">Auto-monitoring every 2 hours</span>
+          </div>
+          <button id="runNowBtn" onclick="triggerRun()" style="
+            padding:10px 20px; background:var(--accent); color:#fff; border:none;
+            border-radius:var(--radius-sm); font-size:0.9rem; font-weight:600;
+            cursor:pointer; transition:background 0.2s;
+          " onmouseover="this.style.background='var(--accent-hover)'"
+             onmouseout="this.style.background='var(--accent)'">▶ Run Now</button>
         </div>
         <div class="schedule-next" id="scheduleNext"></div>
       </div>
@@ -619,6 +627,9 @@
           indicator.classList.remove("running");
           document.getElementById("scheduleText").textContent = "Auto-monitoring every 2 hours";
           document.getElementById("progressContainer").classList.remove("active");
+          const btn = document.getElementById("runNowBtn");
+          btn.disabled = false;
+          btn.textContent = "▶ Run Now";
           fetchScheduleInfo();
         }
       };
@@ -759,6 +770,22 @@
       if (e.key === "Escape") closeLightbox();
     });
 
+    function triggerRun() {
+      const btn = document.getElementById("runNowBtn");
+      btn.disabled = true;
+      btn.textContent = "Starting...";
+      fetch("/api/run")
+        .then((r) => r.json())
+        .then((data) => {
+          btn.textContent = "Running...";
+          connectToProgress();
+        })
+        .catch(() => {
+          btn.disabled = false;
+          btn.textContent = "▶ Run Now";
+        });
+    }
+
     // Load existing results and connect to live updates on page load
     fetch("/api/results")
       .then((r) => r.json())
@@ -769,6 +796,8 @@
           updateStats(data.results);
         }
         if (data.isRunning) {
+          document.getElementById("runNowBtn").disabled = true;
+          document.getElementById("runNowBtn").textContent = "Running...";
           connectToProgress();
         } else {
           fetchScheduleInfo();
