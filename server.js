@@ -1,9 +1,13 @@
 const express = require("express");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const path = require("path");
 const fs = require("fs");
 const https = require("https");
 const http = require("http");
+
+// Apply stealth plugin — patches 10+ bot-detection vectors
+puppeteer.use(StealthPlugin());
 
 // ── Teams Webhook URL ────────────────────────────────────────────────
 // To set up: Teams channel → ••• → Connectors → Incoming Webhook → Create
@@ -112,6 +116,9 @@ async function runMonitoring() {
       "--disable-gpu",
       "--disable-blink-features=AutomationControlled",
       "--window-size=1920,1080",
+      "--disable-features=IsolateOrigins,site-per-process",
+      "--flag-switches-begin",
+      "--flag-switches-end",
     ],
   };
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
@@ -119,6 +126,15 @@ async function runMonitoring() {
   }
 
   const browser = await puppeteer.launch(launchOptions);
+
+  // List of realistic user-agents to rotate
+  const USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+  ];
 
   for (let i = 0; i < URLS.length; i++) {
     const url = URLS[i];
@@ -135,23 +151,49 @@ async function runMonitoring() {
 
     console.log(`[${i + 1}/${URLS.length}] Checking: ${url}`);
 
+    const MAX_RETRIES = 3;
+    let attempt = 0;
+    let succeeded = false;
+
+    while (attempt < MAX_RETRIES && !succeeded) {
+      attempt++;
+      if (attempt > 1) {
+        const retryDelay = attempt * 5000 + Math.random() * 5000;
+        console.log(`  ↻ Retry ${attempt}/${MAX_RETRIES} after ${Math.round(retryDelay / 1000)}s delay...`);
+        await new Promise((r) => setTimeout(r, retryDelay));
+      }
+
     let page;
     try {
       page = await browser.newPage();
 
-      // Set a real user-agent and headers to avoid bot detection
-      await page.setUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-      );
+      // Rotate user-agent per request
+      const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+      await page.setUserAgent(ua);
       await page.setExtraHTTPHeaders({
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
       });
 
-      // Hide webdriver flag
+      // Additional stealth: override navigator properties
       await page.evaluateOnNewDocument(() => {
         Object.defineProperty(navigator, "webdriver", { get: () => false });
+        Object.defineProperty(navigator, "plugins", {
+          get: () => [1, 2, 3, 4, 5],
+        });
+        Object.defineProperty(navigator, "languages", {
+          get: () => ["en-US", "en"],
+        });
+        window.chrome = { runtime: {} };
       });
+
+      // Random delay before navigation (1–3s) to look more human
+      await new Promise((r) => setTimeout(r, 1000 + Math.random() * 2000));
 
       // Navigate and capture HTTP status — wait for full load
       const response = await page.goto(url, {
@@ -161,6 +203,13 @@ async function runMonitoring() {
 
       const httpStatus = response ? response.status() : 0;
       entry.httpStatus = httpStatus;
+
+      // Retry on 403 — likely bot detection
+      if (httpStatus === 403 && attempt < MAX_RETRIES) {
+        console.log(`  ⚠ HTTP 403 on attempt ${attempt} — will retry`);
+        await page.close().catch(() => {});
+        continue;
+      }
 
       if (httpStatus >= 200 && httpStatus < 400) {
         // Wait for all images to fully load
@@ -236,13 +285,25 @@ async function runMonitoring() {
         entry.timestamp = new Date().toISOString();
         console.log(`  ✗ HTTP ${httpStatus} — Skipping screenshot`);
       }
+
+      succeeded = true;
     } catch (err) {
-      entry.status = "error";
-      entry.error = err.message;
-      entry.timestamp = new Date().toISOString();
-      console.log(`  ✗ Error: ${err.message}`);
+      if (attempt < MAX_RETRIES) {
+        console.log(`  ⚠ Error on attempt ${attempt}: ${err.message} — will retry`);
+      } else {
+        entry.status = "error";
+        entry.error = err.message;
+        entry.timestamp = new Date().toISOString();
+        console.log(`  ✗ Error: ${err.message}`);
+      }
     } finally {
       if (page) await page.close().catch(() => {});
+    }
+    } // end while retry loop
+
+    // Add random delay between URLs (2–5s) to avoid rate limiting
+    if (i < URLS.length - 1) {
+      await new Promise((r) => setTimeout(r, 2000 + Math.random() * 3000));
     }
   }
 
