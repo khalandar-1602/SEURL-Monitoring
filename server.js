@@ -108,17 +108,24 @@ async function runMonitoring() {
 
   const launchOptions = {
     headless: "new",
-    defaultViewport: { width: 1920, height: 1080 },
+    defaultViewport: { width: 1366, height: 768 },
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
       "--disable-blink-features=AutomationControlled",
-      "--window-size=1920,1080",
+      "--window-size=1366,768",
       "--disable-features=IsolateOrigins,site-per-process",
-      "--flag-switches-begin",
-      "--flag-switches-end",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-default-apps",
+      "--disable-sync",
+      "--disable-translate",
+      "--metrics-recording-only",
+      "--no-first-run",
+      "--single-process",
+      "--js-flags=--max-old-space-size=256",
     ],
   };
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
@@ -158,7 +165,7 @@ async function runMonitoring() {
     while (attempt < MAX_RETRIES && !succeeded) {
       attempt++;
       if (attempt > 1) {
-        const retryDelay = attempt * 5000 + Math.random() * 5000;
+        const retryDelay = attempt * 3000 + Math.random() * 2000;
         console.log(`  ↻ Retry ${attempt}/${MAX_RETRIES} after ${Math.round(retryDelay / 1000)}s delay...`);
         await new Promise((r) => setTimeout(r, retryDelay));
       }
@@ -180,6 +187,28 @@ async function runMonitoring() {
         "Upgrade-Insecure-Requests": "1",
       });
 
+      // Block heavy resources to speed up page load on free tier
+      await page.setRequestInterception(true);
+      page.on("request", (req) => {
+        const resourceType = req.resourceType();
+        const reqUrl = req.url();
+        // Block analytics, trackers, videos, and heavy media
+        const blocked = ["media", "font", "websocket"];
+        const blockedDomains = [
+          "google-analytics.com", "googletagmanager.com",
+          "facebook.net", "doubleclick.net", "hotjar.com",
+          "newrelic.com", "nr-data.net", "optimizely.com",
+          "demdex.net", "omtrdc.net", "2o7.net",
+        ];
+        if (blocked.includes(resourceType)) {
+          req.abort();
+        } else if (blockedDomains.some((d) => reqUrl.includes(d))) {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+
       // Additional stealth: override navigator properties
       await page.evaluateOnNewDocument(() => {
         Object.defineProperty(navigator, "webdriver", { get: () => false });
@@ -192,14 +221,30 @@ async function runMonitoring() {
         window.chrome = { runtime: {} };
       });
 
-      // Random delay before navigation (1–3s) to look more human
-      await new Promise((r) => setTimeout(r, 1000 + Math.random() * 2000));
+      // Navigate — use domcontentloaded first (fast), then wait for visual readiness
+      // networkidle2 hangs on sites with persistent analytics connections
+      let response;
+      try {
+        response = await page.goto(url, {
+          waitUntil: "domcontentloaded",
+          timeout: 60000,
+        });
+        // Give the page extra time to render visual content after DOM is ready
+        await page.waitForFunction(() => document.readyState === "complete", { timeout: 30000 }).catch(() => {});
+      } catch (navErr) {
+        // If even domcontentloaded fails, try one more time with just the response
+        console.log(`  ⚠ First navigation attempt failed: ${navErr.message}`);
+        response = await page.goto(url, {
+          waitUntil: "load",
+          timeout: 60000,
+        });
+      }
 
-      // Navigate and capture HTTP status — wait for full load
-      const response = await page.goto(url, {
-        waitUntil: ["load", "domcontentloaded", "networkidle2"],
-        timeout: 120000,
-      });
+      // Allow additional network settling (max 8s)
+      await Promise.race([
+        page.waitForNetworkIdle({ idleTime: 1500, timeout: 8000 }),
+        new Promise((r) => setTimeout(r, 8000)),
+      ]).catch(() => {});
 
       const httpStatus = response ? response.status() : 0;
       entry.httpStatus = httpStatus;
@@ -212,7 +257,7 @@ async function runMonitoring() {
       }
 
       if (httpStatus >= 200 && httpStatus < 400) {
-        // Wait for all images to fully load
+        // Wait for visible images to load (5s max)
         await page.evaluate(() => {
           return new Promise((resolve) => {
             const images = Array.from(document.querySelectorAll("img"));
@@ -223,33 +268,23 @@ async function runMonitoring() {
               img.addEventListener("load", () => { if (++loaded >= pending.length) resolve(); });
               img.addEventListener("error", () => { if (++loaded >= pending.length) resolve(); });
             });
-            setTimeout(resolve, 10000);
+            setTimeout(resolve, 5000);
           });
         });
 
-        // Scroll to bottom and back to trigger lazy-loaded content
+        // Quick scroll down and back (triggers lazy content)
         await page.evaluate(async () => {
-          await new Promise((resolve) => {
-            let totalHeight = 0;
-            const distance = 300;
-            const timer = setInterval(() => {
-              window.scrollBy(0, distance);
-              totalHeight += distance;
-              if (totalHeight >= document.body.scrollHeight) {
-                clearInterval(timer);
-                window.scrollTo(0, 0);
-                resolve();
-              }
-            }, 100);
-          });
+          const totalHeight = document.body.scrollHeight;
+          const step = Math.ceil(totalHeight / 5);
+          for (let pos = 0; pos < totalHeight; pos += step) {
+            window.scrollTo(0, pos);
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          window.scrollTo(0, 0);
         });
 
-        // Wait for any newly triggered lazy content to load
-        await new Promise((r) => setTimeout(r, 3000));
-
-        // Scroll back to top so the page looks clean for the screenshot
-        await page.evaluate(() => window.scrollTo(0, 0));
-        await new Promise((r) => setTimeout(r, 1000));
+        // Brief wait for lazy content to render
+        await new Promise((r) => setTimeout(r, 2000));
 
         // Inject timestamp + URL overlay onto the page
         await page.evaluate((pageUrl) => {
@@ -301,9 +336,9 @@ async function runMonitoring() {
     }
     } // end while retry loop
 
-    // Add random delay between URLs (2–5s) to avoid rate limiting
+    // Add delay between URLs (1–3s) to avoid rate limiting
     if (i < URLS.length - 1) {
-      await new Promise((r) => setTimeout(r, 2000 + Math.random() * 3000));
+      await new Promise((r) => setTimeout(r, 1000 + Math.random() * 2000));
     }
   }
 
