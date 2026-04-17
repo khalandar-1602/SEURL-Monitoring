@@ -110,6 +110,8 @@ async function runMonitoring() {
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      "--disable-blink-features=AutomationControlled",
+      "--window-size=1920,1080",
     ],
   };
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
@@ -136,6 +138,20 @@ async function runMonitoring() {
     let page;
     try {
       page = await browser.newPage();
+
+      // Set a real user-agent and headers to avoid bot detection
+      await page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      );
+      await page.setExtraHTTPHeaders({
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+      });
+
+      // Hide webdriver flag
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, "webdriver", { get: () => false });
+      });
 
       // Navigate and capture HTTP status — wait for full load
       const response = await page.goto(url, {
@@ -186,15 +202,15 @@ async function runMonitoring() {
         await page.evaluate(() => window.scrollTo(0, 0));
         await new Promise((r) => setTimeout(r, 1000));
 
-        // Inject timestamp overlay onto the page
-        await page.evaluate(() => {
-          const ts = new Date().toLocaleString("en-US", {
+        // Inject timestamp + URL overlay onto the page
+        await page.evaluate((pageUrl) => {
+          const ts = new Date().toLocaleString("en-IN", {
             dateStyle: "full",
             timeStyle: "long",
-            timeZone: "America/New_York",
+            timeZone: "Asia/Kolkata",
           });
           const banner = document.createElement("div");
-          banner.textContent = `Screenshot captured: ${ts}`;
+          banner.innerHTML = `<div style="font-size:13px;opacity:0.85;margin-bottom:2px;">${pageUrl}</div><div>Screenshot captured: ${ts}</div>`;
           banner.style.cssText = `
             position: fixed; top: 0; left: 0; right: 0; z-index: 999999;
             background: rgba(0,0,0,0.85); color: #fff; text-align: center;
@@ -202,7 +218,7 @@ async function runMonitoring() {
             letter-spacing: 0.5px;
           `;
           document.body.prepend(banner);
-        });
+        }, url);
         await new Promise((r) => setTimeout(r, 500));
 
         // Take page screenshot
@@ -243,106 +259,79 @@ async function sendTeamsNotification(results) {
     return;
   }
 
-  const success = results.filter((r) => r.status === "success").length;
-  const failed = results.filter((r) => r.status === "failed" || r.status === "error").length;
-  const total = results.length;
-  const timestamp = new Date().toLocaleString();
+  const BASE_URL = process.env.BASE_URL || "https://seurl-monitoring.onrender.com";
 
-  const statusColor = failed === 0 ? "Good" : failed <= 3 ? "Warning" : "Attention";
-
-  // Build rows for each URL result
-  const urlRows = results.map((r) => {
+  // Send one card per URL with its screenshot
+  for (const r of results) {
     const icon = r.status === "success" ? "✅" : r.status === "failed" ? "❌" : r.status === "error" ? "⚠️" : "⏳";
-    const httpStr = r.httpStatus ? ` (HTTP ${r.httpStatus})` : "";
-    const shortUrl = r.url.length > 70 ? r.url.substring(0, 67) + "..." : r.url;
-    return {
-      type: "TextBlock",
-      text: `${icon} **${r.index}.** ${shortUrl}${httpStr}`,
-      wrap: true,
-      size: "Small",
-      spacing: "Small",
-    };
-  });
+    const httpStr = r.httpStatus ? ` — HTTP ${r.httpStatus}` : "";
 
-  const card = {
-    type: "message",
-    attachments: [
+    const bodyItems = [
       {
-        contentType: "application/vnd.microsoft.card.adaptive",
-        contentUrl: null,
-        content: {
-          $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
-          type: "AdaptiveCard",
-          version: "1.4",
-          body: [
-            {
-              type: "TextBlock",
-              text: "⚡ URL Monitor Report",
-              weight: "Bolder",
-              size: "Large",
-              style: "heading",
-            },
-            {
-              type: "TextBlock",
-              text: `Completed at ${timestamp}`,
-              isSubtle: true,
-              spacing: "None",
-            },
-            {
-              type: "ColumnSet",
-              columns: [
-                {
-                  type: "Column",
-                  width: "stretch",
-                  items: [
-                    { type: "TextBlock", text: "Total", weight: "Bolder", horizontalAlignment: "Center" },
-                    { type: "TextBlock", text: `${total}`, size: "ExtraLarge", horizontalAlignment: "Center", color: "Accent" },
-                  ],
-                },
-                {
-                  type: "Column",
-                  width: "stretch",
-                  items: [
-                    { type: "TextBlock", text: "Success", weight: "Bolder", horizontalAlignment: "Center" },
-                    { type: "TextBlock", text: `${success}`, size: "ExtraLarge", horizontalAlignment: "Center", color: "Good" },
-                  ],
-                },
-                {
-                  type: "Column",
-                  width: "stretch",
-                  items: [
-                    { type: "TextBlock", text: "Failed", weight: "Bolder", horizontalAlignment: "Center" },
-                    { type: "TextBlock", text: `${failed}`, size: "ExtraLarge", horizontalAlignment: "Center", color: "Attention" },
-                  ],
-                },
-              ],
-            },
-            {
-              type: "TextBlock",
-              text: "**URL Results:**",
-              weight: "Bolder",
-              spacing: "Medium",
-            },
-            ...urlRows,
-          ],
-          actions: [
-            {
-              type: "Action.OpenUrl",
-              title: "📊 Open Dashboard & View Screenshots",
-              url: `https://seurl-monitoring.onrender.com/`,
-            },
-          ],
-        },
+        type: "TextBlock",
+        text: `${icon} **[${r.index}/${results.length}]** ${r.url}`,
+        wrap: true,
+        weight: "Bolder",
+        size: "Medium",
       },
-    ],
-  };
+      {
+        type: "TextBlock",
+        text: `Status: **${r.status.toUpperCase()}**${httpStr}`,
+        wrap: true,
+        spacing: "Small",
+        isSubtle: true,
+      },
+    ];
 
-  try {
-    await postJson(TEAMS_WEBHOOK_URL, card);
-    console.log("[Teams] Notification sent successfully.");
-  } catch (err) {
-    console.error("[Teams] Failed to send notification:", err.message);
+    if (r.screenshotFile) {
+      const imageUrl = `${BASE_URL}/screenshots/${r.screenshotFile}`;
+      console.log(`[Teams] Image URL for URL ${r.index}: ${imageUrl}`);
+      bodyItems.push({
+        type: "Image",
+        url: imageUrl,
+        size: "Stretch",
+        spacing: "Medium",
+      });
+    }
+
+    if (r.error) {
+      bodyItems.push({
+        type: "TextBlock",
+        text: `⚠️ Error: ${r.error}`,
+        wrap: true,
+        color: "Attention",
+        spacing: "Small",
+      });
+    }
+
+    const card = {
+      type: "message",
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          contentUrl: null,
+          content: {
+            $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+            type: "AdaptiveCard",
+            version: "1.4",
+            body: bodyItems,
+          },
+        },
+      ],
+    };
+
+    try {
+      const response = await postJson(TEAMS_WEBHOOK_URL, card);
+      console.log(`[Teams] Screenshot sent for URL ${r.index}: ${r.url} — Response: ${response}`);
+    } catch (err) {
+      console.error(`[Teams] Failed to send screenshot for URL ${r.index}: ${r.url}`, err.message);
+    }
+
+    // Small delay between messages to avoid throttling
+    await new Promise((resolve) => setTimeout(resolve, 1500));
   }
+
+  console.log("[Teams] All screenshots sent.");
 }
 
 function postJson(url, body) {
@@ -406,3 +395,4 @@ app.listen(PORT, () => {
     .catch((err) => console.error("Startup monitoring error:", err))
     .finally(() => { isRunning = false; });
 });
+ 
