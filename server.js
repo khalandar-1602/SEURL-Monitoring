@@ -108,7 +108,7 @@ async function runMonitoring() {
 
   const launchOptions = {
     headless: "new",
-    defaultViewport: { width: 1366, height: 768 },
+    defaultViewport: { width: 1366, height: 768, deviceScaleFactor: 1 },
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -116,6 +116,7 @@ async function runMonitoring() {
       "--disable-gpu",
       "--disable-blink-features=AutomationControlled",
       "--window-size=1366,768",
+      "--force-device-scale-factor=1",
       "--disable-features=IsolateOrigins,site-per-process",
       "--disable-extensions",
       "--disable-background-networking",
@@ -286,7 +287,15 @@ async function runMonitoring() {
         // Brief wait for lazy content to render
         await new Promise((r) => setTimeout(r, 2000));
 
-        // Inject timestamp + URL overlay onto the page
+        // Zoom out the page to 60% so more content is visible in the screenshot
+        await page.evaluate(() => {
+          document.body.style.transformOrigin = "top left";
+          document.body.style.transform = "scale(0.6)";
+          document.body.style.width = "166.67%"; // 100/0.6 to prevent horizontal cutoff
+        });
+        await new Promise((r) => setTimeout(r, 500));
+
+        // Inject timestamp + URL overlay onto the page (after zoom)
         await page.evaluate((pageUrl) => {
           const ts = new Date().toLocaleString("en-IN", {
             dateStyle: "full",
@@ -298,14 +307,14 @@ async function runMonitoring() {
           banner.style.cssText = `
             position: fixed; top: 0; left: 0; right: 0; z-index: 999999;
             background: rgba(0,0,0,0.85); color: #fff; text-align: center;
-            padding: 8px 16px; font: bold 14px/1.4 sans-serif;
-            letter-spacing: 0.5px;
+            padding: 6px 12px; font: bold 12px/1.4 sans-serif;
+            letter-spacing: 0.5px; transform: scale(1.67); transform-origin: top center;
           `;
           document.body.prepend(banner);
         }, url);
         await new Promise((r) => setTimeout(r, 500));
 
-        // Take page screenshot
+        // Take page screenshot — captures the zoomed-out view showing more content
         const filename = `${sanitizeFilename(url)}_${Date.now()}.png`;
         const filepath = path.join(SCREENSHOTS_DIR, filename);
 
