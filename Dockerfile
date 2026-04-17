@@ -1,11 +1,13 @@
 FROM node:20-slim
 
-# Install Chromium and its dependencies
+# Install Chromium and its dependencies (including CA certs for HTTPS)
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-ipafont-gothic \
     fonts-freefont-ttf \
     fonts-noto-color-emoji \
+    ca-certificates \
+    dbus \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 

@@ -125,8 +125,6 @@ async function runMonitoring() {
       "--disable-translate",
       "--metrics-recording-only",
       "--no-first-run",
-      "--single-process",
-      "--js-flags=--max-old-space-size=256",
     ],
   };
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
@@ -180,60 +178,83 @@ async function runMonitoring() {
       await page.setUserAgent(ua);
       await page.setExtraHTTPHeaders({
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0",
       });
 
-      // Block heavy resources to speed up page load on free tier
-      await page.setRequestInterception(true);
-      page.on("request", (req) => {
-        const resourceType = req.resourceType();
-        const reqUrl = req.url();
-        // Block analytics, trackers, videos, and heavy media
-        const blocked = ["media", "font", "websocket"];
-        const blockedDomains = [
-          "google-analytics.com", "googletagmanager.com",
-          "facebook.net", "doubleclick.net", "hotjar.com",
-          "newrelic.com", "nr-data.net", "optimizely.com",
-          "demdex.net", "omtrdc.net", "2o7.net",
-        ];
-        if (blocked.includes(resourceType)) {
-          req.abort();
-        } else if (blockedDomains.some((d) => reqUrl.includes(d))) {
-          req.abort();
-        } else {
-          req.continue();
-        }
+      // Block heavy resources via CDP — does NOT break stealth plugin
+      // (unlike setRequestInterception which enables detectable Fetch.enable)
+      const cdpSession = await page.createCDPSession();
+      await cdpSession.send("Network.setBlockedURLs", {
+        urls: [
+          "*google-analytics.com*",
+          "*googletagmanager.com*",
+          "*facebook.net*",
+          "*doubleclick.net*",
+          "*hotjar.com*",
+          "*newrelic.com*",
+          "*nr-data.net*",
+          "*optimizely.com*",
+          "*demdex.net*",
+          "*omtrdc.net*",
+          "*2o7.net*",
+        ],
       });
+      await cdpSession.send("Network.enable");
 
       // Additional stealth: override navigator properties
       await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(navigator, "webdriver", { get: () => false });
+        // Mask webdriver
+        Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+        // Realistic plugins array
         Object.defineProperty(navigator, "plugins", {
-          get: () => [1, 2, 3, 4, 5],
+          get: () => {
+            const plugins = [
+              { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", description: "Portable Document Format" },
+              { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", description: "" },
+              { name: "Native Client", filename: "internal-nacl-plugin", description: "" },
+            ];
+            plugins.length = 3;
+            return plugins;
+          },
         });
         Object.defineProperty(navigator, "languages", {
           get: () => ["en-US", "en"],
         });
-        window.chrome = { runtime: {} };
+        // Chrome runtime object
+        window.chrome = {
+          runtime: {
+            onMessage: { addListener: () => {}, removeListener: () => {} },
+            onConnect: { addListener: () => {}, removeListener: () => {} },
+            sendMessage: () => {},
+          },
+          loadTimes: () => ({}),
+          csi: () => ({}),
+          app: { isInstalled: false },
+        };
+        // Override permissions query
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) =>
+          parameters.name === "notifications"
+            ? Promise.resolve({ state: Notification.permission })
+            : originalQuery(parameters);
       });
 
       // Navigate — use domcontentloaded first (fast), then wait for visual readiness
-      // networkidle2 hangs on sites with persistent analytics connections
       let response;
       try {
         response = await page.goto(url, {
           waitUntil: "domcontentloaded",
           timeout: 60000,
         });
-        // Give the page extra time to render visual content after DOM is ready
+        // Wait for page to fully render
         await page.waitForFunction(() => document.readyState === "complete", { timeout: 30000 }).catch(() => {});
       } catch (navErr) {
-        // If even domcontentloaded fails, try one more time with just the response
         console.log(`  ⚠ First navigation attempt failed: ${navErr.message}`);
         response = await page.goto(url, {
           waitUntil: "load",
@@ -246,6 +267,27 @@ async function runMonitoring() {
         page.waitForNetworkIdle({ idleTime: 1500, timeout: 8000 }),
         new Promise((r) => setTimeout(r, 8000)),
       ]).catch(() => {});
+
+      // Try to dismiss cookie consent banners (common on se.com)
+      await page.evaluate(() => {
+        const selectors = [
+          '#onetrust-accept-btn-handler',
+          '.onetrust-accept-btn-handler',
+          '[id*="accept"][id*="cookie"]',
+          '[class*="accept"][class*="cookie"]',
+          'button[aria-label*="Accept"]',
+          'button[aria-label*="accept"]',
+          '.cookie-accept',
+          '#cookie-accept',
+          '[data-testid="accept-cookies"]',
+        ];
+        for (const sel of selectors) {
+          const btn = document.querySelector(sel);
+          if (btn) { btn.click(); break; }
+        }
+      }).catch(() => {});
+      // Brief wait after cookie dismissal
+      await new Promise((r) => setTimeout(r, 1000));
 
       const httpStatus = response ? response.status() : 0;
       entry.httpStatus = httpStatus;
