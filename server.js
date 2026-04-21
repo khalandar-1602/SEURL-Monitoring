@@ -406,7 +406,7 @@ async function sendTeamsNotification(results) {
     return;
   }
 
-  const BASE_URL = process.env.BASE_URL || "https://seurl-monitoring.onrender.com";
+  const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
   // Send one card per URL with its screenshot
   for (const r of results) {

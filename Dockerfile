@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y \
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Optimize Node.js memory for Render free tier (512MB RAM)
-ENV NODE_OPTIONS="--max-old-space-size=384"
+# Optimize Node.js memory (adjust based on EC2 instance size)
+ENV NODE_OPTIONS="--max-old-space-size=768"
 
 WORKDIR /app
 
