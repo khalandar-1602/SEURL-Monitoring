@@ -27,7 +27,7 @@ else
 fi
 
 echo "=== Getting EC2 Public IP ==="
-EC2_PUBLIC_IP=$(curl -s https://ec2-13-239-33-12.ap-southeast-2.compute.amazonaws.com/meta-data/public-ipv4 2>/dev/null || echo "localhost")
+EC2_PUBLIC_IP=$(curl -s https://13.239.33.12/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost")
 echo "Public IP: $EC2_PUBLIC_IP"
 export EC2_PUBLIC_IP
 
