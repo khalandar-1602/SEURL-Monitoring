@@ -27,7 +27,15 @@ else
 fi
 
 echo "=== Getting EC2 Public IP ==="
-EC2_PUBLIC_IP=$(curl -s https://13.239.33.12/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost")
+# Use AWS Instance Metadata Service (IMDSv2 with token, fall back to IMDSv1)
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || echo "")
+if [ -n "$TOKEN" ]; then
+  EC2_PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+    http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost")
+else
+  EC2_PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost")
+fi
 echo "Public IP: $EC2_PUBLIC_IP"
 export EC2_PUBLIC_IP
 
