@@ -27,16 +27,7 @@ else
 fi
 
 echo "=== Getting EC2 Public IP ==="
-# IMDSv2 (token-based) — works on both Amazon Linux and Ubuntu
-TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-  -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || echo "")
-if [ -n "$TOKEN" ]; then
-  EC2_PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-    http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost")
-else
-  # Fallback to IMDSv1
-  EC2_PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost")
-fi
+EC2_PUBLIC_IP=$(curl -s https://ec2-13-239-33-12.ap-southeast-2.compute.amazonaws.com/meta-data/public-ipv4 2>/dev/null || echo "localhost")
 echo "Public IP: $EC2_PUBLIC_IP"
 export EC2_PUBLIC_IP
 
