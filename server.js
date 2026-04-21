@@ -25,6 +25,16 @@ const PROXY_CONFIG = {
   PASSWORD: "",
 };
 
+// ── Anti-WAF tuning ──────────────────────────────────────────────────
+// Delay between consecutive URLs (in seconds). The WAF on se.com escalates
+// blocking when requests are too frequent. Recommended: 30-90s without proxy.
+const DELAY_BETWEEN_URLS_MIN_SEC = 30;
+const DELAY_BETWEEN_URLS_MAX_SEC = 60;
+// Recycle (close & relaunch) the browser before every URL — gives a fresh
+// TLS session, new fingerprint, and clears any cookies/storage that may
+// have been used to track the bot. Slower but much more reliable.
+const RECYCLE_BROWSER_PER_URL = true;
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -155,7 +165,8 @@ async function runMonitoring() {
     launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
   }
 
-  const browser = await puppeteer.launch(launchOptions);
+  const launchBrowser = () => puppeteer.launch(launchOptions);
+  let browser = await launchBrowser();
 
   // List of realistic user-agents to rotate
   const USER_AGENTS = [
@@ -419,9 +430,19 @@ async function runMonitoring() {
     }
     } // end while retry loop
 
-    // Add delay between URLs (1–3s) to avoid rate limiting
+    // Add delay between URLs to avoid WAF rate-limiting
     if (i < URLS.length - 1) {
-      await new Promise((r) => setTimeout(r, 1000 + Math.random() * 2000));
+      const minMs = DELAY_BETWEEN_URLS_MIN_SEC * 1000;
+      const maxMs = DELAY_BETWEEN_URLS_MAX_SEC * 1000;
+      const waitMs = minMs + Math.random() * (maxMs - minMs);
+      console.log(`  ⏳ Waiting ${Math.round(waitMs / 1000)}s before next URL...`);
+      await new Promise((r) => setTimeout(r, waitMs));
+
+      // Recycle browser to get a fresh fingerprint / clean session
+      if (RECYCLE_BROWSER_PER_URL) {
+        await browser.close().catch(() => {});
+        browser = await launchBrowser();
+      }
     }
   }
 
