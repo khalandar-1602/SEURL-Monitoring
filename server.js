@@ -14,6 +14,17 @@ puppeteer.use(StealthPlugin());
 // Paste the webhook URL below:
 const TEAMS_WEBHOOK_URL = "https://schneiderelectric.webhook.office.com/webhookb2/fd46b562-f7b7-4cb3-85c1-a5c0554e6bb6@6e51e1ad-c54b-4b39-b598-0ffe9ae68fef/IncomingWebhook/dad613afad574907ab7bc1f72c24d288/deec8c19-39f2-4b50-b73f-9d0526366ac6/V2lpMIxqeDlly17DpkqBsAA2L7dwZSIt7JY1hCsmrPSHk1";
 
+// ── Proxy configuration ──────────────────────────────────────────────
+// Set ENABLED to true and fill in your proxy details.
+// Supported schemes: http://, https://, socks5://
+// Leave USERNAME/PASSWORD empty if your proxy doesn't require auth.
+const PROXY_CONFIG = {
+  ENABLED: false,
+  SERVER: "http://proxy.example.com:8080",
+  USERNAME: "",
+  PASSWORD: "",
+};
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -106,26 +117,39 @@ function sanitizeFilename(url) {
 async function runMonitoring() {
   console.log("Starting URL monitoring...\n");
 
+  // ── Proxy configuration ───────────────────────────────────────────
+  // Edit PROXY_CONFIG at the top of this file to enable/configure.
+  const PROXY_SERVER = PROXY_CONFIG.ENABLED ? PROXY_CONFIG.SERVER : "";
+  const PROXY_USERNAME = PROXY_CONFIG.USERNAME || "";
+  const PROXY_PASSWORD = PROXY_CONFIG.PASSWORD || "";
+
+  const baseArgs = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-blink-features=AutomationControlled",
+    "--window-size=1366,768",
+    "--force-device-scale-factor=1",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-sync",
+    "--disable-translate",
+    "--metrics-recording-only",
+    "--no-first-run",
+  ];
+
+  if (PROXY_SERVER) {
+    baseArgs.push(`--proxy-server=${PROXY_SERVER}`);
+    console.log(`Using proxy: ${PROXY_SERVER}`);
+  }
+
   const launchOptions = {
     headless: "new",
     defaultViewport: { width: 1366, height: 768, deviceScaleFactor: 1 },
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--disable-blink-features=AutomationControlled",
-      "--window-size=1366,768",
-      "--force-device-scale-factor=1",
-      "--disable-features=IsolateOrigins,site-per-process",
-      "--disable-extensions",
-      "--disable-background-networking",
-      "--disable-default-apps",
-      "--disable-sync",
-      "--disable-translate",
-      "--metrics-recording-only",
-      "--no-first-run",
-    ],
+    args: baseArgs,
   };
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
     launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -172,6 +196,14 @@ async function runMonitoring() {
     let page;
     try {
       page = await browser.newPage();
+
+      // Authenticate with proxy if credentials provided
+      if (PROXY_SERVER && PROXY_USERNAME) {
+        await page.authenticate({
+          username: PROXY_USERNAME,
+          password: PROXY_PASSWORD,
+        });
+      }
 
       // Rotate user-agent per request
       const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
